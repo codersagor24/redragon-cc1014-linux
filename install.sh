@@ -43,7 +43,12 @@ udevadm trigger               2>/dev/null || true
 # ── 3. Config file ────────────────────────────────────────
 echo "[3/6] Installing default config..."
 if [ ! -f /etc/cooler-display.conf ]; then
-    echo 'DISPLAY_MODE="cpu_temp"' > /etc/cooler-display.conf
+    cat <<EOF > /etc/cooler-display.conf
+mode="cpu_temp"
+alert_enabled="0"
+alert_temp="80"
+alert_value="99"
+EOF
 fi
 
 # ── 4. Daemon ─────────────────────────────────────────────

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Cooler Display Manager — GTK3 GUI for Linux Digital Cooler Display Driver
+Cooler Display Manager — GTK3 GUI
 Controls the cooler-display systemd service and shows live system telemetry.
+Supports all display modes: CPU/GPU temps, RAM, Disk, Network, Clock, Alert, and more.
 """
 
 import gi
@@ -14,19 +15,51 @@ import time
 import threading
 import os
 import sys
+import glob
 
 APP_NAME    = "Cooler Display Manager"
 SERVICE     = "cooler-display.service"
-DAEMON_PATH = "/usr/local/bin/cooler_display.py"
 CONFIG_PATH = "/etc/cooler-display.conf"
 
-DISPLAY_MODES = [
-    ("cpu_temp",   "🌡️  CPU Temperature"),
-    ("gpu_temp",   "🎮  GPU Temperature"),
-    ("cpu_load",   "📊  CPU Load %"),
-    ("hottest",    "🔥  Hottest Component"),
-    ("alternating","🔄  Alternating (CPU/GPU)"),
+# ── All display modes ─────────────────────────────────────────────────────────
+MODE_GROUPS = [
+    ("🌡️  Temperature", [
+        ("cpu_temp",    "CPU Temperature (°C)"),
+        ("gpu_temp",    "GPU Temperature (°C)"),
+        ("nvme_temp",   "NVMe SSD Temperature (°C)"),
+        ("hottest",     "Hottest Component (CPU vs GPU)"),
+        ("alternating", "Alternating: CPU ↔ GPU every 5s"),
+    ]),
+    ("📊  Load & Usage", [
+        ("cpu_load",        "CPU Load (%)"),
+        ("gpu_load",        "GPU Load (%)"),
+        ("ram_pct",         "RAM Usage (%)"),
+        ("disk_pct",        "Disk Usage (%)"),
+    ]),
+    ("⚡  Performance", [
+        ("cpu_freq_ghz10",  "CPU Frequency (GHz × 10, e.g. 34 = 3.4GHz)"),
+        ("gpu_power",       "GPU Power Draw (Watts)"),
+        ("gpu_fan",         "GPU Fan Speed (%)"),
+        ("disk_mbps",       "Disk I/O Speed (MB/s)"),
+    ]),
+    ("🌐  Network", [
+        ("net_dl_kbps",     "Download Speed (KB/s)"),
+        ("net_ul_kbps",     "Upload Speed (KB/s)"),
+        ("net_dl_mbps",     "Download Speed (Mbps)"),
+    ]),
+    ("🕐  Time & System", [
+        ("clock_hour",      "Clock — Current Hour (0–23)"),
+        ("clock_minute",    "Clock — Current Minute (0–59)"),
+        ("uptime_hours",    "System Uptime (hours)"),
+        ("ram_used_gb",     "RAM Used (GB)"),
+    ]),
+    ("🚨  Alert", [
+        ("alert",           "Alert Mode — flashes when temp threshold exceeded"),
+    ]),
 ]
+
+# Flat list for lookup
+ALL_MODES = [(mid, mlbl) for _, modes in MODE_GROUPS for mid, mlbl in modes]
 
 
 def run_cmd(cmd, use_sudo=False):
@@ -42,6 +75,33 @@ def run_cmd(cmd, use_sudo=False):
 def get_service_status():
     ok, out, _ = run_cmd(["systemctl", "is-active", SERVICE])
     return out.strip()
+
+
+def read_config():
+    cfg = {"mode": "cpu_temp", "alert_enabled": "0", "alert_temp": "80", "alert_value": "99"}
+    try:
+        with open(CONFIG_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip().strip('"').strip("'")
+    except FileNotFoundError:
+        pass
+    return cfg
+
+
+def write_config(cfg_dict):
+    lines = [f'{k}="{v}"' for k, v in cfg_dict.items()]
+    content = "\n".join(lines) + "\n"
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            f.write(content)
+        return True
+    except PermissionError:
+        escaped = content.replace('"', '\\"')
+        ok, _, _ = run_cmd(["bash", "-c", f'echo "{escaped}" > {CONFIG_PATH}'], use_sudo=True)
+        return ok
 
 
 def get_cpu_temperature():
@@ -65,39 +125,57 @@ def get_cpu_temperature():
     return None
 
 
-def get_gpu_temperature():
+def get_nvme_temperature():
+    try:
+        temps = psutil.sensors_temperatures()
+        if "nvme" in temps:
+            for e in temps["nvme"]:
+                if e.current and e.current > 0:
+                    return e.current
+    except Exception:
+        pass
+    return None
+
+
+def get_gpu_metrics():
+    result = {"temp": None, "load": None, "power_w": None, "fan_pct": None}
     try:
         out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+            ["nvidia-smi",
+             "--query-gpu=temperature.gpu,utilization.gpu,power.draw,fan.speed",
+             "--format=csv,noheader,nounits"],
             stderr=subprocess.DEVNULL, timeout=1
-        )
-        return int(out.decode().strip().split("\n")[0])
+        ).decode().strip().split("\n")[0].split(",")
+        result["temp"]    = int(out[0].strip())
+        result["load"]    = int(out[1].strip())
+        result["power_w"] = int(float(out[2].strip()))
+        result["fan_pct"] = int(out[3].strip())
     except Exception:
-        return None
+        pass
+    return result
 
 
-def read_config():
-    mode = "cpu_temp"
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH) as f:
-                for line in f:
-                    if line.startswith("DISPLAY_MODE="):
-                        mode = line.split("=", 1)[1].strip().strip('"')
-        except Exception:
-            pass
-    return {"mode": mode}
+_last_net = None
+_last_net_t = 0
 
-
-def write_config(mode):
+def get_network_speed():
+    global _last_net, _last_net_t
     try:
-        with open(CONFIG_PATH, "w") as f:
-            f.write(f'DISPLAY_MODE="{mode}"\n')
-        return True
-    except PermissionError:
-        ok, _, _ = run_cmd(["bash", "-c", f'echo DISPLAY_MODE=\\"{mode}\\" > {CONFIG_PATH}'], use_sudo=True)
-        return ok
+        io = psutil.net_io_counters()
+        now = time.time()
+        if _last_net and now > _last_net_t:
+            dt = now - _last_net_t
+            dl = (io.bytes_recv - _last_net.bytes_recv) / (1024 * dt)
+            ul = (io.bytes_sent - _last_net.bytes_sent) / (1024 * dt)
+            _last_net, _last_net_t = io, now
+            return max(0, dl), max(0, ul)
+        _last_net, _last_net_t = io, now
+    except Exception:
+        pass
+    return 0.0, 0.0
 
+
+# ── App ───────────────────────────────────────────────────────────────────────
 
 class CoolerDisplayApp(Gtk.Application):
     def __init__(self):
@@ -113,273 +191,292 @@ class CoolerDisplayApp(Gtk.Application):
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title=APP_NAME)
-        self.set_default_size(420, 520)
-        self.set_resizable(False)
+        self.set_default_size(500, 700)
+        self.set_resizable(True)
         self.set_border_width(0)
-
-        try:
-            self.set_icon_name("temperature-symbolic")
-        except Exception:
-            pass
-
+        self._selected_mode = "cpu_temp"
+        self._cfg = read_config()
+        self._selected_mode = self._cfg.get("mode", "cpu_temp")
         self._build_ui()
-        self._refresh_status()
-
-        # Refresh telemetry every second
         GLib.timeout_add(1000, self._refresh_status)
 
-    # ─── UI Construction ────────────────────────────────────────────────────
-
     def _build_ui(self):
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.add(outer)
+        # Main vertical box
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add(vbox)
 
-        # Header bar
+        # ── Header ──
         header = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        header.set_margin_top(24)
-        header.set_margin_bottom(16)
-        header.set_margin_start(24)
-        header.set_margin_end(24)
+        header.set_margin_top(20)
+        header.set_margin_bottom(14)
+        header.set_margin_start(20)
+        header.set_margin_end(20)
 
-        title_lbl = Gtk.Label()
-        title_lbl.set_markup('<span size="16000" weight="bold">🧊  Cooler Display Manager</span>')
-        title_lbl.set_halign(Gtk.Align.START)
+        title = Gtk.Label()
+        title.set_markup('<span size="15000" weight="bold">🧊  Cooler Display Manager</span>')
+        title.set_halign(Gtk.Align.START)
+        sub = Gtk.Label(label="Linux driver for USB digital cooler displays")
+        sub.set_halign(Gtk.Align.START)
+        sub.get_style_context().add_class("dim-label")
+        header.pack_start(title, False, False, 0)
+        header.pack_start(sub,   False, False, 0)
+        vbox.pack_start(header, False, False, 0)
+        vbox.pack_start(Gtk.Separator(), False, False, 0)
 
-        sub_lbl = Gtk.Label(label="Linux driver for USB digital cooler displays")
-        sub_lbl.set_halign(Gtk.Align.START)
-        sub_lbl.get_style_context().add_class("dim-label")
+        # ── Scrollable content ──
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        vbox.pack_start(scroll, True, True, 0)
 
-        header.pack_start(title_lbl, False, False, 0)
-        header.pack_start(sub_lbl, False, False, 0)
-        outer.pack_start(header, False, False, 0)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
+        content.set_margin_start(20)
+        content.set_margin_end(20)
+        scroll.add(content)
 
-        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        outer.pack_start(sep, False, False, 0)
-
-        # Main content
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-        content.set_margin_top(20)
-        content.set_margin_bottom(20)
-        content.set_margin_start(24)
-        content.set_margin_end(24)
-        outer.pack_start(content, True, True, 0)
-
-        # Service status card
-        content.pack_start(self._make_section_label("Service"), False, False, 0)
+        # Service card
+        content.pack_start(self._section("Service"), False, False, 0)
         content.pack_start(self._build_service_card(), False, False, 0)
 
-        # Live telemetry card
-        content.pack_start(self._make_section_label("Live Telemetry"), False, False, 0)
+        # Live telemetry
+        content.pack_start(self._section("Live Telemetry"), False, False, 0)
         content.pack_start(self._build_telemetry_card(), False, False, 0)
 
-        # Display mode card
-        content.pack_start(self._make_section_label("Display Mode"), False, False, 0)
+        # Display mode selector
+        content.pack_start(self._section("Display Mode"), False, False, 0)
         content.pack_start(self._build_mode_card(), False, False, 0)
+
+        # Alert settings
+        content.pack_start(self._section("Alert Settings"), False, False, 0)
+        content.pack_start(self._build_alert_card(), False, False, 0)
 
         self.show_all()
 
-    def _make_section_label(self, text):
-        lbl = Gtk.Label(label=f"<b>{text}</b>")
-        lbl.set_use_markup(True)
+    # ── Section label ──
+
+    def _section(self, text):
+        lbl = Gtk.Label()
+        lbl.set_markup(f"<b>{text}</b>")
         lbl.set_halign(Gtk.Align.START)
         lbl.set_margin_top(4)
         return lbl
 
+    # ── Service card ──
+
     def _build_service_card(self):
         frame = Gtk.Frame()
-        frame.get_style_context().add_class("view")
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        box.set_margin_top(12)
-        box.set_margin_bottom(12)
-        box.set_margin_start(16)
-        box.set_margin_end(16)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        box.set_margin_top(12); box.set_margin_bottom(12)
+        box.set_margin_start(16); box.set_margin_end(16)
         frame.add(box)
 
-        self.status_icon = Gtk.Label(label="⬤")
-        self.status_lbl  = Gtk.Label(label="Checking...")
-        self.status_lbl.set_halign(Gtk.Align.START)
+        self._status_dot = Gtk.Label(label="⬤")
+        self._status_lbl = Gtk.Label(label="Checking...")
+        self._status_lbl.set_halign(Gtk.Align.START)
 
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_box.set_halign(Gtk.Align.END)
+        status_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        status_row.pack_start(self._status_dot, False, False, 0)
+        status_row.pack_start(self._status_lbl, True, True, 0)
 
-        self.start_btn  = Gtk.Button(label="Start")
-        self.stop_btn   = Gtk.Button(label="Stop")
-        self.restart_btn = Gtk.Button(label="Restart")
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self._start_btn   = Gtk.Button(label="▶ Start")
+        self._stop_btn    = Gtk.Button(label="⏹ Stop")
+        self._restart_btn = Gtk.Button(label="↺ Restart")
+        self._start_btn.get_style_context().add_class("suggested-action")
+        self._stop_btn.get_style_context().add_class("destructive-action")
+        self._start_btn.connect("clicked",   lambda b: self._svc("start"))
+        self._stop_btn.connect("clicked",    lambda b: self._svc("stop"))
+        self._restart_btn.connect("clicked", lambda b: self._svc("restart"))
+        btn_box.pack_start(self._start_btn,   False, False, 0)
+        btn_box.pack_start(self._stop_btn,    False, False, 0)
+        btn_box.pack_start(self._restart_btn, False, False, 0)
 
-        self.start_btn.get_style_context().add_class("suggested-action")
-        self.stop_btn.get_style_context().add_class("destructive-action")
-
-        self.start_btn.connect("clicked", self._on_start)
-        self.stop_btn.connect("clicked", self._on_stop)
-        self.restart_btn.connect("clicked", self._on_restart)
-
-        btn_box.pack_start(self.start_btn,   False, False, 0)
-        btn_box.pack_start(self.stop_btn,    False, False, 0)
-        btn_box.pack_start(self.restart_btn, False, False, 0)
-
-        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        status_box.pack_start(self.status_icon, False, False, 0)
-        status_box.pack_start(self.status_lbl,  True,  True,  0)
-
-        box.pack_start(status_box, True,  True,  0)
+        box.pack_start(status_row, True,  True,  0)
         box.pack_start(btn_box,    False, False, 0)
-
         return frame
+
+    # ── Telemetry card ──
 
     def _build_telemetry_card(self):
         frame = Gtk.Frame()
-        frame.get_style_context().add_class("view")
         grid = Gtk.Grid()
-        grid.set_column_spacing(32)
-        grid.set_row_spacing(10)
-        grid.set_margin_top(14)
-        grid.set_margin_bottom(14)
-        grid.set_margin_start(16)
-        grid.set_margin_end(16)
+        grid.set_column_spacing(20)
+        grid.set_row_spacing(8)
+        grid.set_margin_top(12); grid.set_margin_bottom(12)
+        grid.set_margin_start(16); grid.set_margin_end(16)
         frame.add(grid)
 
-        def make_stat(icon, label_text, row):
-            icon_lbl = Gtk.Label(label=icon)
-            icon_lbl.set_halign(Gtk.Align.START)
-            lbl = Gtk.Label(label=label_text)
-            lbl.set_halign(Gtk.Align.START)
-            lbl.get_style_context().add_class("dim-label")
-            val = Gtk.Label(label="—")
-            val.set_halign(Gtk.Align.END)
-            val.set_hexpand(True)
-            val.set_markup("<b>—</b>")
-            grid.attach(icon_lbl, 0, row, 1, 1)
-            grid.attach(lbl,      1, row, 1, 1)
-            grid.attach(val,      2, row, 1, 1)
-            return val
+        def row(icon, label, r):
+            il = Gtk.Label(label=icon); il.set_halign(Gtk.Align.START)
+            ll = Gtk.Label(label=label); ll.set_halign(Gtk.Align.START)
+            ll.get_style_context().add_class("dim-label")
+            vl = Gtk.Label(label="—"); vl.set_halign(Gtk.Align.END); vl.set_hexpand(True)
+            vl.set_markup("<b>—</b>")
+            grid.attach(il, 0, r, 1, 1)
+            grid.attach(ll, 1, r, 1, 1)
+            grid.attach(vl, 2, r, 1, 1)
+            return vl
 
-        self.cpu_temp_val  = make_stat("🌡️",  "CPU Temperature", 0)
-        self.gpu_temp_val  = make_stat("🎮",  "GPU Temperature", 1)
-        self.cpu_load_val  = make_stat("📊",  "CPU Load",        2)
-        self.cpu_freq_val  = make_stat("⚡",  "CPU Frequency",   3)
-
+        self._t_cpu_temp  = row("🌡️",  "CPU Temperature",    0)
+        self._t_gpu_temp  = row("🎮",  "GPU Temperature",    1)
+        self._t_nvme_temp = row("💾",  "NVMe Temperature",   2)
+        self._t_cpu_load  = row("📊",  "CPU Load",           3)
+        self._t_gpu_load  = row("🖥️",  "GPU Load",           4)
+        self._t_ram       = row("🧠",  "RAM Usage",          5)
+        self._t_disk      = row("🗄️",  "Disk Usage",         6)
+        self._t_gpu_pwr   = row("⚡",  "GPU Power Draw",     7)
+        self._t_net_dl    = row("⬇️",  "Download Speed",     8)
+        self._t_net_ul    = row("⬆️",  "Upload Speed",       9)
+        self._t_cpu_freq  = row("🔥",  "CPU Frequency",     10)
         return frame
+
+    # ── Mode card ──
 
     def _build_mode_card(self):
         frame = Gtk.Frame()
-        frame.get_style_context().add_class("view")
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.set_margin_top(12)
-        box.set_margin_bottom(12)
-        box.set_margin_start(16)
-        box.set_margin_end(16)
-        frame.add(box)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        outer.set_margin_top(12); outer.set_margin_bottom(12)
+        outer.set_margin_start(16); outer.set_margin_end(16)
+        frame.add(outer)
 
-        cfg = read_config()
-        current_mode = cfg.get("mode", "cpu_temp")
+        self._mode_btns = {}
+        first = None
+        for group_name, modes in MODE_GROUPS:
+            lbl = Gtk.Label()
+            lbl.set_markup(f'<small><b>{group_name}</b></small>')
+            lbl.set_halign(Gtk.Align.START)
+            lbl.set_margin_top(6)
+            outer.pack_start(lbl, False, False, 0)
+            for mode_id, mode_label in modes:
+                if first is None:
+                    btn = Gtk.RadioButton.new_with_label(None, mode_label)
+                    first = btn
+                else:
+                    btn = Gtk.RadioButton.new_with_label_from_widget(first, mode_label)
+                if mode_id == self._selected_mode:
+                    btn.set_active(True)
+                btn.connect("toggled", self._on_mode_toggled, mode_id)
+                self._mode_btns[mode_id] = btn
+                outer.pack_start(btn, False, False, 0)
 
-        self.mode_buttons = {}
-        first_btn = None
-
-        for mode_id, mode_label in DISPLAY_MODES:
-            if first_btn is None:
-                btn = Gtk.RadioButton.new_with_label(None, mode_label)
-                first_btn = btn
-            else:
-                btn = Gtk.RadioButton.new_with_label_from_widget(first_btn, mode_label)
-
-            if mode_id == current_mode:
-                btn.set_active(True)
-
-            btn.connect("toggled", self._on_mode_changed, mode_id)
-            self.mode_buttons[mode_id] = btn
-            box.pack_start(btn, False, False, 0)
-
-        apply_btn = Gtk.Button(label="Apply Mode & Restart Service")
-        apply_btn.get_style_context().add_class("suggested-action")
-        apply_btn.set_margin_top(6)
-        apply_btn.connect("clicked", self._on_apply_mode)
-        box.pack_start(apply_btn, False, False, 0)
-
-        self._selected_mode = current_mode
+        apply = Gtk.Button(label="✅  Apply Mode & Restart Service")
+        apply.get_style_context().add_class("suggested-action")
+        apply.set_margin_top(10)
+        apply.connect("clicked", self._on_apply)
+        outer.pack_start(apply, False, False, 0)
         return frame
 
-    # ─── Callbacks ──────────────────────────────────────────────────────────
+    # ── Alert card ──
 
-    def _on_mode_changed(self, btn, mode_id):
+    def _build_alert_card(self):
+        frame = Gtk.Frame()
+        grid = Gtk.Grid()
+        grid.set_column_spacing(12)
+        grid.set_row_spacing(8)
+        grid.set_margin_top(12); grid.set_margin_bottom(12)
+        grid.set_margin_start(16); grid.set_margin_end(16)
+        frame.add(grid)
+
+        def lbl(text, row, col):
+            l = Gtk.Label(label=text)
+            l.set_halign(Gtk.Align.START)
+            grid.attach(l, col, row, 1, 1)
+            return l
+
+        lbl("Temperature threshold (°C):", 0, 0)
+        self._alert_temp = Gtk.SpinButton.new_with_range(50, 100, 1)
+        self._alert_temp.set_value(int(self._cfg.get("alert_temp", "80")))
+        grid.attach(self._alert_temp, 1, 0, 1, 1)
+
+        lbl("Value to flash when triggered:", 1, 0)
+        self._alert_val = Gtk.SpinButton.new_with_range(0, 99, 1)
+        self._alert_val.set_value(int(self._cfg.get("alert_value", "99")))
+        grid.attach(self._alert_val, 1, 1, 1, 1)
+
+        hint = Gtk.Label()
+        hint.set_markup('<small><span foreground="gray">Use Alert Mode above to enable. Display flashes between current temp and this value.</span></small>')
+        hint.set_line_wrap(True)
+        hint.set_halign(Gtk.Align.START)
+        grid.attach(hint, 0, 2, 2, 1)
+        return frame
+
+    # ── Callbacks ──────────────────────────────────────────────────────────
+
+    def _on_mode_toggled(self, btn, mode_id):
         if btn.get_active():
             self._selected_mode = mode_id
 
-    def _on_apply_mode(self, btn):
-        write_config(self._selected_mode)
-        self._service_action("restart")
-        self._show_toast(f"Mode set to: {self._selected_mode.replace('_', ' ').title()}")
+    def _on_apply(self, btn):
+        self._cfg["mode"] = self._selected_mode
+        self._cfg["alert_temp"]   = str(int(self._alert_temp.get_value()))
+        self._cfg["alert_value"]  = str(int(self._alert_val.get_value()))
+        write_config(self._cfg)
+        self._svc("restart")
+        # Find mode label
+        label = next((l for mid, l in ALL_MODES if mid == self._selected_mode), self._selected_mode)
+        self._toast(f"Mode set to:\n{label}")
 
-    def _on_start(self, btn):
-        self._service_action("start")
-
-    def _on_stop(self, btn):
-        self._service_action("stop")
-
-    def _on_restart(self, btn):
-        self._service_action("restart")
-
-    def _service_action(self, action):
+    def _svc(self, action):
         def do():
             run_cmd(["systemctl", action, SERVICE], use_sudo=True)
             GLib.idle_add(self._refresh_status)
         threading.Thread(target=do, daemon=True).start()
 
-    # ─── Status Refresh ─────────────────────────────────────────────────────
+    # ── Live refresh ───────────────────────────────────────────────────────
 
     def _refresh_status(self):
         status = get_service_status()
         active = status == "active"
-        inactive = status in ("inactive", "failed", "dead")
 
         if active:
-            self.status_icon.set_markup('<span foreground="#2ecc71">⬤</span>')
-            self.status_lbl.set_text("Running")
-        elif inactive:
-            self.status_icon.set_markup('<span foreground="#e74c3c">⬤</span>')
-            self.status_lbl.set_text(f"Stopped ({status})")
+            self._status_dot.set_markup('<span foreground="#2ecc71">⬤</span>')
+            self._status_lbl.set_text("Running")
+        elif status in ("inactive", "failed", "dead"):
+            self._status_dot.set_markup('<span foreground="#e74c3c">⬤</span>')
+            self._status_lbl.set_text(f"Stopped ({status})")
         else:
-            self.status_icon.set_markup('<span foreground="#f39c12">⬤</span>')
-            self.status_lbl.set_text(f"Status: {status}")
+            self._status_dot.set_markup('<span foreground="#f39c12">⬤</span>')
+            self._status_lbl.set_text(f"Status: {status}")
 
-        self.start_btn.set_sensitive(not active)
-        self.stop_btn.set_sensitive(active)
+        self._start_btn.set_sensitive(not active)
+        self._stop_btn.set_sensitive(active)
 
-        # Update telemetry
-        cpu_temp = get_cpu_temperature()
-        gpu_temp = get_gpu_temperature()
-        cpu_load = psutil.cpu_percent(interval=None)
-        freq_info = psutil.cpu_freq()
-        cpu_freq = freq_info.current if freq_info else None
+        # Gather telemetry
+        cpu_temp  = get_cpu_temperature()
+        nvme_temp = get_nvme_temperature()
+        gpu       = get_gpu_metrics()
+        mem       = psutil.virtual_memory()
+        disk      = psutil.disk_usage("/")
+        cpu_load  = psutil.cpu_percent(interval=None)
+        cpu_freq  = psutil.cpu_freq()
+        dl, ul    = get_network_speed()
 
-        self.cpu_temp_val.set_text(f"{cpu_temp:.0f} °C" if cpu_temp else "N/A")
-        self.gpu_temp_val.set_text(f"{gpu_temp} °C"    if gpu_temp else "N/A")
-        self.cpu_load_val.set_text(f"{cpu_load:.0f} %")
-        self.cpu_freq_val.set_text(f"{cpu_freq:.0f} MHz" if cpu_freq else "N/A")
+        def v(val, fmt):
+            return fmt.format(val) if val is not None else "N/A"
 
-        return True  # keep timer alive
+        self._t_cpu_temp.set_markup(f"<b>{v(cpu_temp, '{:.0f} °C')}</b>")
+        self._t_gpu_temp.set_markup(f"<b>{v(gpu['temp'], '{} °C')}</b>")
+        self._t_nvme_temp.set_markup(f"<b>{v(nvme_temp, '{:.0f} °C')}</b>")
+        self._t_cpu_load.set_markup(f"<b>{cpu_load:.0f} %</b>")
+        self._t_gpu_load.set_markup(f"<b>{v(gpu['load'], '{} %')}</b>")
+        self._t_ram.set_markup(f"<b>{mem.percent:.0f} %  ({mem.used/1024**3:.1f} / {mem.total/1024**3:.0f} GB)</b>")
+        self._t_disk.set_markup(f"<b>{disk.percent:.0f} %  ({disk.used/1024**3:.0f} / {disk.total/1024**3:.0f} GB)</b>")
+        self._t_gpu_pwr.set_markup(f"<b>{v(gpu['power_w'], '{} W')}</b>")
+        self._t_net_dl.set_markup(f"<b>{dl:.0f} KB/s</b>")
+        self._t_net_ul.set_markup(f"<b>{ul:.0f} KB/s</b>")
+        if cpu_freq:
+            self._t_cpu_freq.set_markup(f"<b>{cpu_freq.current:.0f} MHz  ({cpu_freq.current/1000:.2f} GHz)</b>")
+        return True
 
-    def _show_toast(self, message):
-        dialog = Gtk.MessageDialog(
-            transient_for=self,
-            flags=0,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK,
-            text=message,
-        )
-        dialog.run()
-        dialog.destroy()
-
-
-def check_root_for_sudo():
-    """Warn the user if sudo won't work without a password."""
-    ok, _, _ = run_cmd(["sudo", "-n", "true"])
-    if not ok:
-        print("Warning: sudo requires a password. Service controls may not work.", file=sys.stderr)
+    def _toast(self, msg):
+        d = Gtk.MessageDialog(transient_for=self, flags=0,
+                              message_type=Gtk.MessageType.INFO,
+                              buttons=Gtk.ButtonsType.OK, text=msg)
+        d.run(); d.destroy()
 
 
 def main():
-    check_root_for_sudo()
     app = CoolerDisplayApp()
     app.run(sys.argv)
 

@@ -96,24 +96,61 @@ cooler-display-ui
 ```
 
 The GUI lets you:
-- 👁️ **See live stats** — CPU temp, GPU temp, CPU load, frequency
-- ▶️ **Start / Stop** the background service
-- 🔄 **Switch display modes** — CPU Temp, GPU Temp, CPU Load, or Alternating
-- 📊 Check the current status at a glance
+- 👁️ **See live stats** — CPU temp, GPU temp, NVMe temp, CPU load, GPU load, RAM, Disk, GPU power, Network speed (download/upload), CPU frequency
+- ▶️ **Start / Stop / Restart** the background service
+- 🔄 **Switch between 18+ display modes** across 6 categories
+- 🚨 **Configure temperature alert thresholds** (e.g., flash `99` if CPU hits 80°C+)
 
 ---
 
 ## 🛠️ Display Modes
 
-| Mode | What Shows on Cooler Display |
-| :--- | :--- |
-| **CPU Temperature** (default) | CPU package temperature in °C |
-| **GPU Temperature** | GPU temperature in °C |
-| **CPU Load** | CPU utilization % (0–99) |
-| **Hottest Component** | Whichever of CPU/GPU is currently hotter |
-| **Alternating** | Cycles between CPU and GPU every 5 seconds |
+You can switch modes with one click inside the GUI or by editing `/etc/cooler-display.conf`.
 
-Switch modes from the GUI, or edit the config at `/etc/cooler-display.conf`.
+### 🌡️ Temperature
+| Mode Key | Name | What Shows on Cooler Display |
+| :--- | :--- | :--- |
+| `cpu_temp` *(default)* | **CPU Temperature** | CPU package temperature in °C |
+| `gpu_temp` | **GPU Temperature** | NVIDIA GPU temperature in °C |
+| `nvme_temp` | **NVMe SSD Temperature** | M.2 NVMe SSD drive temperature in °C |
+| `hottest` | **Hottest Component** | Whichever of CPU or GPU is currently running hotter |
+| `alternating` | **Alternating Mode** | Cycles between CPU and GPU temp every 5 seconds |
+
+### 📊 Load & Utilization
+| Mode Key | Name | What Shows on Cooler Display |
+| :--- | :--- | :--- |
+| `cpu_load` | **CPU Load** | Total CPU utilization percentage (0–99%) |
+| `gpu_load` | **GPU Load** | GPU core utilization percentage (0–100%) |
+| `ram_pct` | **RAM Usage %** | System memory usage percentage (0–100%) |
+| `disk_pct` | **Disk Usage %** | Root disk storage utilization percentage (0–100%) |
+
+### ⚡ Performance & Sensors
+| Mode Key | Name | What Shows on Cooler Display |
+| :--- | :--- | :--- |
+| `cpu_freq_ghz10` | **CPU Frequency** | CPU speed in GHz × 10 (e.g., `34` = 3.4 GHz) |
+| `gpu_power` | **GPU Power Draw** | GPU current power consumption in Watts |
+| `gpu_fan` | **GPU Fan Speed** | GPU fan duty cycle percentage (0–100%) |
+| `disk_mbps` | **Disk I/O** | Real-time disk read + write throughput in MB/s |
+
+### 🌐 Network
+| Mode Key | Name | What Shows on Cooler Display |
+| :--- | :--- | :--- |
+| `net_dl_kbps` | **Download Speed (KB/s)** | Live incoming network throughput (0–999 KB/s) |
+| `net_ul_kbps` | **Upload Speed (KB/s)** | Live outgoing network throughput (0–999 KB/s) |
+| `net_dl_mbps` | **Download Speed (Mbps)** | Live incoming network throughput in Megabits/s |
+
+### 🕐 Time & System
+| Mode Key | Name | What Shows on Cooler Display |
+| :--- | :--- | :--- |
+| `clock_hour` | **Current Hour** | 24-hour format hour (0–23) |
+| `clock_minute` | **Current Minute** | Current minute (0–59) |
+| `uptime_hours` | **System Uptime** | Hours system has been running since boot |
+| `ram_used_gb` | **RAM Used (GB)** | Active physical memory in Gigabytes |
+
+### 🚨 Alert Mode
+| Mode Key | Name | Description |
+| :--- | :--- | :--- |
+| `alert` | **Temperature Alert** | Displays CPU temp normally, but flashes a configurable warning value (default: `99`) when CPU temperature reaches or exceeds the threshold (default: `80°C`). |
 
 ---
 
