@@ -1,89 +1,156 @@
-# Redragon CC-1014 CPU Cooler Digital Display Driver for Linux
+<div align="center">
 
-Linux driver and systemd daemon for the **Redragon CC-1014** CPU cooler digital temperature display (USB HID `ID 5131:2007`).
+# 🧊 Linux Digital Cooler Display Driver
 
-Reverse engineered from the official Redragon Windows utility (`PcInfoMonitorPro.exe`).
+### Open-Source Linux Driver for USB HID CPU Cooler Displays with Digital Temperature Screens
+
+[![Linux](https://img.shields.io/badge/OS-Linux-FCC624?logo=linux&logoColor=black)](https://kernel.org)
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![USB ID](https://img.shields.io/badge/USB-5131%3A2007-orange)]()
+[![GUI App](https://img.shields.io/badge/GUI-GTK3-blueviolet?logo=gnome)]()
+
+*Real-time CPU & GPU temperature, utilization, and frequency display — works natively on Linux without Windows or Wine.*
+
+</div>
 
 ---
 
-## 🚀 এক ক্লিকে ইনস্টলেশন (Quick 1-Command Install)
+## 📖 Overview
 
-ভবিষ্যতে যেকোনো নতুন লিনাক্স (Ubuntu, Debian, Fedora, Arch Linux, Manjaro, ইত্যাদি) ইনস্টল করার পর এই ফোল্ডারে এসে টার্মিনালে শুধু একটি কমান্ড রান করবেন:
+Many CPU air coolers and AIO liquid coolers (such as the **Redragon CC-1014**, **darkFlash Nebula** series, and similar OEM variants) feature built-in **7-segment digital temperature displays** connected to your motherboard's internal USB 2.0 header.
+
+On Linux, these devices are detected as:
+```
+ID 5131:2007 MSR Mini HID Device
+```
+
+Manufacturers only provide Windows-only software for these displays, leaving them **dark and unusable on Linux**. This project solves that — it's a fully native Linux driver that reads your CPU & GPU telemetry and feeds it directly to the display, with a GUI app to control everything.
+
+---
+
+## ✨ Features
+
+- 🌡️ **Real-time display** — CPU temperature, GPU temperature, CPU load, frequency
+- 🖥️ **GTK3 GUI app** — start/stop, switch display modes, monitor live data
+- ⚙️ **Systemd service** — runs in the background, starts automatically on boot
+- 📦 **Multi-distro installer** — Ubuntu, Debian, Arch, Fedora, openSUSE
+- 🔌 **Auto device detection** — reconnects automatically if the device is unplugged
+- 🛠️ **No Windows, no Wine** — 100% native Linux
+
+---
+
+## 🖥️ Supported Hardware
+
+| Device | Type | USB ID | Status |
+| :--- | :--- | :--- | :--- |
+| **Redragon CC-1014** | Air Cooler | `5131:2007` | ✅ Confirmed Working |
+| **Redragon CC-1015 / CC-101x Series** | Air Cooler | `5131:2007` | ✅ Fully Compatible |
+| **darkFlash Nebula DN240D / DN360D** | AIO Liquid Cooler | `5131:2007` | ✅ Compatible |
+| **darkFlash DH360D** | AIO Liquid Cooler | `5131:2007` | ✅ Compatible |
+| **4FAN XZ Bit Case Display** | Telemetry Panel | `5131:2007` | ✅ Compatible |
+| **Generic Witmod / Ruilian OEM Panels** | Air / Liquid Coolers | `5131:2007` | ✅ Compatible |
+
+> 📄 For a comprehensive compatibility list including DeepCool, Thermalright, and Jonsbo — see [DEVICES.md](DEVICES.md).
+
+---
+
+## 🚀 Installation
+
+### Option 1: One-Click Installer (Recommended)
+
+Download and run the self-contained installer — no git required:
 
 ```bash
+wget https://github.com/codersagor24/redragon-cc1014-linux/releases/latest/download/cooler-display-installer.run
+chmod +x cooler-display-installer.run
+sudo ./cooler-display-installer.run
+```
+
+### Option 2: Clone & Install
+
+```bash
+git clone https://github.com/codersagor24/redragon-cc1014-linux.git
+cd redragon-cc1014-linux
 sudo ./install.sh
 ```
 
-এই স্ক্রিপ্টটি স্বয়ংক্রিয়ভাবে:
-1. প্রয়োজনীয় প্যাকেজ (`python3-hid`, `python3-psutil`, `lm-sensors`) ইনস্টল করবে।
-2. USB পারমিশন udev রুল সেট করবে।
-3. পাইথন প্রোগ্রামটি `/usr/local/bin/cooler_display.py` তে রাখবে।
-4. ব্যাকগ্রাউন্ড `cooler-display.service` সিস্টেমডি সার্ভিস চালু ও বুট টাইমে অটো-রান কনফিগার করবে।
+The installer automatically:
+1. Detects your Linux distro and installs dependencies
+2. Sets up a udev rule for non-root USB access
+3. Installs the background daemon
+4. Installs the **GUI app** (`cooler-display-ui`)
+5. Enables and starts the systemd service
 
 ---
 
-## 🛠 স্ট্যাটাস চেক ও কন্ট্রোল (Commands)
+## 🖱️ Using the GUI App
 
-- **লাইভ স্ট্যাটাস দেখতে:**
-  ```bash
-  systemctl status cooler-display.service
-  ```
-- **রিয়েলটাইম লগ দেখতে:**
-  ```bash
-  journalctl -u cooler-display.service -f
-  ```
-- **সার্ভিস রিস্টার্ট করতে:**
-  ```bash
-  sudo systemctl restart cooler-display.service
-  ```
-- **আনইনস্টল করতে:**
-  ```bash
-  sudo ./uninstall.sh
-  ```
+After installation, launch the app from your application menu:
+
+> **Cooler Display Manager**
+
+Or from terminal:
+```bash
+cooler-display-ui
+```
+
+The GUI lets you:
+- 👁️ **See live stats** — CPU temp, GPU temp, CPU load, frequency
+- ▶️ **Start / Stop** the background service
+- 🔄 **Switch display modes** — CPU Temp, GPU Temp, CPU Load, or Alternating
+- 📊 Check the current status at a glance
 
 ---
 
-## 💾 এই কোডটি নিরাপদে সেভ রাখার উপায় (Backup Options)
+## 🛠️ Display Modes
 
-### উপায় ১: GitHub-এ সেভ রাখা (সবচেয়ে সুবিধাজনক ও নিরাপদ)
-আপনার GitHub অ্যাকাউন্টে একটি নতুন Repository তৈরি করে (যেমন: `redragon-cc1014-linux`) নিচের কমান্ডগুলো দিয়ে পুশ করে রাখতে পারেন:
+| Mode | What Shows on Cooler Display |
+| :--- | :--- |
+| **CPU Temperature** (default) | CPU package temperature in °C |
+| **GPU Temperature** | GPU temperature in °C |
+| **CPU Load** | CPU utilization % (0–99) |
+| **Hottest Component** | Whichever of CPU/GPU is currently hotter |
+| **Alternating** | Cycles between CPU and GPU every 5 seconds |
 
-```bash
-cd ~/redragon-cc1014-linux
-git init
-git add .
-git commit -m "Initial commit of Redragon CC-1014 Linux driver"
-git branch -M main
-git remote add origin https://github.com/<your-username>/redragon-cc1014-linux.git
-git push -u origin main
-```
-ভবিষ্যতে নতুন লিনাক্সে শুধু `git clone <repo-url>` করে `sudo ./install.sh` রান করলেই কাজ হয়ে যাবে!
-
-### উপায় ২: পেনড্রাইভ বা পার্সোনাল হার্ডড্রাইভে সেভ রাখা
-আপনার এক্সটার্নাল ড্রাইভ বা পেনড্রাইভে এই সম্পূর্ণ ফোল্ডারটি কপি করে রেখে দিন:
-```bash
-cp -r ~/redragon-cc1014-linux "/run/media/absagor/Sagor Personal/"
-```
-
-### উপায় ৩: একটি জিপ (.zip / .tar.gz) ফাইল হিসেবে ক্লাউডে (Google Drive) রাখা
-```bash
-tar -czvf ~/redragon-cc1014-linux.tar.gz -C ~ redragon-cc1014-linux
-```
-এই `redragon-cc1014-linux.tar.gz` ফাইলটি গুগল ড্রাইভে বা মেইলে সেভ রাখতে পারেন।
+Switch modes from the GUI, or edit the config at `/etc/cooler-display.conf`.
 
 ---
 
-## 📊 রিভার্স-ইঞ্জিনিয়ার্ড HID প্রোটোকল (Protocol Details)
+## 🛠️ Manual Service Management
 
-- **USB VID/PID**: `0x5131:0x2007` (Report ID: `0x00`)
-- **Packet Size**: 65 Bytes
-- `packet[0]`: `0x00` (Report ID)
-- `packet[1]`: `0x40` (Header / Payload size 64)
-- `packet[2]`: **CPU Temperature (°C)**
-- `packet[3]`: **CPU Usage %**
-- `packet[4..5]`: CPU Clock (MHz, 16-bit Big-Endian)
-- `packet[6..7]`: CPU Fan RPM
-- `packet[8..9]`: CPU Power (W)
-- `packet[10]`: GPU Temperature (°C)
-- `packet[11]`: GPU Usage %
-- `packet[12..64]`: `0x00` Zero padding
+```bash
+# Check status
+systemctl status cooler-display.service
+
+# View live logs
+journalctl -u cooler-display.service -f
+
+# Restart
+sudo systemctl restart cooler-display.service
+
+# Stop
+sudo systemctl stop cooler-display.service
+
+# Uninstall completely
+sudo ./uninstall.sh
+```
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! If you have another compatible cooler or display panel:
+
+1. Fork this repository
+2. Add your device to [DEVICES.md](DEVICES.md)
+3. Test on your hardware
+4. Submit a Pull Request
+
+> 💬 Open an [Issue](https://github.com/codersagor24/redragon-cc1014-linux/issues) if your device has a different USB ID or doesn't work out of the box.
+
+---
+
+## 📄 License
+
+MIT License — free to use, modify, and distribute. See [LICENSE](LICENSE).

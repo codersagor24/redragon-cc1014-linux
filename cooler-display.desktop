@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Cooler Display Manager
+Comment=Control your USB digital cooler display on Linux
+Exec=cooler-display-ui
+Icon=temperature-symbolic
+Terminal=false
+Type=Application
+Categories=System;HardwareSettings;
+Keywords=cooler;temperature;cpu;display;redragon;fan;
+StartupNotify=true

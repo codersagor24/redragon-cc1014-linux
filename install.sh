@@ -1,54 +1,79 @@
 #!/usr/bin/env bash
+# install.sh — Cooler Display Driver Installer
+# Supports: Ubuntu/Debian (apt), Arch Linux (pacman), Fedora/RHEL (dnf), openSUSE (zypper)
 set -e
 
-# Make sure the script is run with root privileges
 if [ "$EUID" -ne 0 ]; then
-  echo "[-] Please run as root (e.g., sudo ./install.sh)"
-  exit 1
+    echo "[-] Please run as root: sudo ./install.sh"
+    exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "[+] Installing Redragon CC-1014 Display Driver from $SCRIPT_DIR..."
+echo "======================================================"
+echo "  🧊  Cooler Display Driver — Installer"
+echo "======================================================"
+echo ""
 
-# Detect Package Manager and Install Dependencies
+# ── 1. Install dependencies ───────────────────────────────
+echo "[1/6] Installing dependencies..."
 if command -v apt-get &>/dev/null; then
-    echo "[+] Detected Debian/Ubuntu based system (apt)..."
-    apt-get update
-    apt-get install -y python3-hid python3-psutil lm-sensors
+    echo "      Detected: Debian / Ubuntu (apt)"
+    apt-get update -qq
+    apt-get install -y python3-hid python3-psutil lm-sensors python3-gi gir1.2-gtk-3.0
 elif command -v pacman &>/dev/null; then
-    echo "[+] Detected Arch Linux based system (pacman)..."
-    pacman -Sy --noconfirm python-hidapi python-psutil lm_sensors
+    echo "      Detected: Arch Linux (pacman)"
+    pacman -Sy --noconfirm python-hidapi python-psutil lm_sensors python-gobject gtk3
 elif command -v dnf &>/dev/null; then
-    echo "[+] Detected Fedora/RHEL based system (dnf)..."
-    dnf install -y python3-hidapi python3-psutil lm_sensors
+    echo "      Detected: Fedora / RHEL (dnf)"
+    dnf install -y python3-hidapi python3-psutil lm_sensors python3-gobject gtk3
 elif command -v zypper &>/dev/null; then
-    echo "[+] Detected openSUSE based system (zypper)..."
-    zypper install -y python3-hidapi python3-psutil sensors
+    echo "      Detected: openSUSE (zypper)"
+    zypper install -y python3-hidapi python3-psutil sensors python3-gobject gtk3
 else
-    echo "[!] Warning: Unknown package manager. Please ensure python3, hidapi, psutil, and lm-sensors are installed manually."
+    echo "      [!] Unknown distro — please install manually:"
+    echo "          python3-hid, python3-psutil, lm-sensors, python3-gi, gtk3"
 fi
 
-# 1. Install udev rule
-echo "[+] Installing udev rule..."
+# ── 2. udev rule ──────────────────────────────────────────
+echo "[2/6] Installing udev rule (non-root USB access)..."
 cp "$SCRIPT_DIR/99-cooler-display.rules" /etc/udev/rules.d/99-cooler-display.rules
-udevadm control --reload-rules || true
-udevadm trigger || true
+udevadm control --reload-rules 2>/dev/null || true
+udevadm trigger               2>/dev/null || true
 
-# 2. Install daemon script
-echo "[+] Installing daemon script to /usr/local/bin/cooler_display.py..."
+# ── 3. Config file ────────────────────────────────────────
+echo "[3/6] Installing default config..."
+if [ ! -f /etc/cooler-display.conf ]; then
+    echo 'DISPLAY_MODE="cpu_temp"' > /etc/cooler-display.conf
+fi
+
+# ── 4. Daemon ─────────────────────────────────────────────
+echo "[4/6] Installing daemon..."
 cp "$SCRIPT_DIR/cooler_display.py" /usr/local/bin/cooler_display.py
 chmod +x /usr/local/bin/cooler_display.py
 
-# 3. Install and start systemd service
-echo "[+] Installing and enabling systemd service..."
+# ── 5. GUI app ────────────────────────────────────────────
+echo "[5/6] Installing GUI app..."
+cp "$SCRIPT_DIR/cooler_display_ui.py" /usr/local/bin/cooler-display-ui
+chmod +x /usr/local/bin/cooler-display-ui
+
+# Desktop entry
+cp "$SCRIPT_DIR/cooler-display.desktop" /usr/share/applications/cooler-display.desktop
+update-desktop-database /usr/share/applications/ 2>/dev/null || true
+
+# ── 6. Systemd service ────────────────────────────────────
+echo "[6/6] Enabling systemd service..."
 cp "$SCRIPT_DIR/cooler-display.service" /etc/systemd/system/cooler-display.service
 systemctl daemon-reload
 systemctl enable cooler-display.service
 systemctl restart cooler-display.service
 
 echo ""
-echo "=========================================================="
-echo " [✓] Installation complete! The display should now be on."
-echo " Check live status: systemctl status cooler-display.service"
-echo " View real-time logs: journalctl -u cooler-display.service -f"
-echo "=========================================================="
+echo "======================================================"
+echo "  ✅  Installation complete!"
+echo ""
+echo "  • Service is running in the background"
+echo "  • Launch GUI: cooler-display-ui"
+echo "                (or search 'Cooler Display' in your app menu)"
+echo "  • Service logs: journalctl -u cooler-display.service -f"
+echo "  • Uninstall:    sudo ./uninstall.sh"
+echo "======================================================"
