@@ -1,16 +1,16 @@
 <div align="center">
 
-# 🧊 Linux Digital Cooler Display Driver
-
-### Open-Source Linux Driver for USB HID CPU Cooler Displays with Digital Temperature Screens
+# 🧊 Universal Digital Cooler Display Driver
+### Cross-Platform Driver & GUI Manager for USB HID CPU Cooler Displays (Linux & Windows 10/11)
 
 [![Linux](https://img.shields.io/badge/OS-Linux-FCC624?logo=linux&logoColor=black)](https://kernel.org)
+[![Windows](https://img.shields.io/badge/OS-Windows_10%2F11-0078D6?logo=windows&logoColor=white)](https://microsoft.com/windows)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![USB ID](https://img.shields.io/badge/USB-5131%3A2007-orange)]()
-[![GUI App](https://img.shields.io/badge/GUI-GTK3-blueviolet?logo=gnome)]()
+[![GUI](https://img.shields.io/badge/GUI-GTK3%20%7C%20Tkinter-blueviolet)]()
 
-*Real-time CPU & GPU temperature, utilization, and frequency display — works natively on Linux without Windows or Wine.*
+*Real-time CPU & GPU temperature, utilization, and telemetry driver with 18+ display modes and desktop GUI for both Linux and Windows.*
 
 </div>
 
@@ -18,25 +18,20 @@
 
 ## 📖 Overview
 
-Many CPU air coolers and AIO liquid coolers (such as the **Redragon CC-1014**, **darkFlash Nebula** series, and similar OEM variants) feature built-in **7-segment digital temperature displays** connected to your motherboard's internal USB 2.0 header.
+Many CPU air coolers and AIO liquid coolers (such as the **Redragon CC-1014**, **darkFlash Nebula** series, and similar OEM variants) feature built-in **7-segment digital temperature displays** connected to your motherboard's internal USB 2.0 header (`5131:2007`).
 
-On Linux, these devices are detected as:
-```
-ID 5131:2007 MSR Mini HID Device
-```
-
-Manufacturers only provide Windows-only software for these displays, leaving them **dark and unusable on Linux**. This project solves that — it's a fully native Linux driver that reads your CPU & GPU telemetry and feeds it directly to the display, with a GUI app to control everything.
+This project provides a **lightweight, open-source, universal driver and GUI manager** that works seamlessly across **both Linux and Windows**, replacing bloated proprietary OEM utilities with a clean, low-resource daemon and modern desktop control panel.
 
 ---
 
 ## ✨ Features
 
-- 🌡️ **Real-time display** — CPU temperature, GPU temperature, CPU load, frequency
-- 🖥️ **GTK3 GUI app** — start/stop, switch display modes, monitor live data
-- ⚙️ **Systemd service** — runs in the background, starts automatically on boot
-- 📦 **Multi-distro installer** — Ubuntu, Debian, Arch, Fedora, openSUSE
-- 🔌 **Auto device detection** — reconnects automatically if the device is unplugged
-- 🛠️ **No Windows, no Wine** — 100% native Linux
+- 🐧 **Linux Support** — Native systemd service, udev rules, GTK3 desktop interface, multi-distro installer
+- 🪟 **Windows Support** — Silent background daemon, auto-start on login, native Tkinter GUI, one-click `.bat` scripts
+- 🌡️ **18+ Display Modes** — CPU/GPU/NVMe temps, RAM %, Disk %, GPU power, Network speed (KB/s, Mbps), Clock, and more
+- 🖥️ **Desktop GUI** — Real-time telemetry grid, one-click mode switcher, service start/stop controls
+- 🚨 **High-Temp Alert** — Flashing warning alert on cooler display when configurable temperature threshold is exceeded
+- ⚡ **Ultra Lightweight** — Consumes minimal CPU cycles and runs silently in the background
 
 ---
 
@@ -55,14 +50,36 @@ Manufacturers only provide Windows-only software for these displays, leaving the
 
 ---
 
-## 🚀 Installation
+## 🪟 Windows Setup (Windows 10 / 11)
+
+### 1. Requirements
+- Ensure **Python 3.8+** is installed ([python.org](https://www.python.org/downloads/)).
+  *(Make sure to check **"Add Python to PATH"** during Python setup).*
+
+### 2. Quick Install
+1. [Download this repository as ZIP](https://github.com/codersagor24/redragon-cc1014-linux/archive/refs/heads/master.zip) and extract it.
+2. Right-click **`windows_install.bat`** and click **Open** (or double-click it).
+3. The installer will automatically:
+   - Install required Python dependencies (`hidapi`, `psutil`)
+   - Create your user configuration in `%APPDATA%\cooler-display\`
+   - Set up silent auto-start on Windows boot
+   - Start the driver immediately
+
+### 3. Using the Windows GUI
+Double-click **`run_gui.bat`** to launch the GUI Manager to switch display modes and view live telemetry!
+
+- **To start driver:** Double-click `windows_start.bat`
+- **To stop driver:** Double-click `windows_stop.bat`
+- **To uninstall:** Double-click `windows_uninstall.bat`
+
+---
+
+## 🐧 Linux Setup
 
 ### Option 1: One-Click Installer (Recommended)
 
-Download and run the self-contained installer — no git required:
-
 ```bash
-wget https://github.com/codersagor24/redragon-cc1014-linux/releases/latest/download/cooler-display-installer.run
+wget https://raw.githubusercontent.com/codersagor24/redragon-cc1014-linux/master/cooler-display-installer.run
 chmod +x cooler-display-installer.run
 sudo ./cooler-display-installer.run
 ```
@@ -75,25 +92,9 @@ cd redragon-cc1014-linux
 sudo ./install.sh
 ```
 
-The installer automatically:
-1. Detects your Linux distro and installs dependencies
-2. Sets up a udev rule for non-root USB access
-3. Installs the background daemon
-4. Installs the **GUI app** (`cooler-display-ui`)
-5. Enables and starts the systemd service
-
----
-
-## 🖱️ Using the GUI App
-
-After installation, launch the app from your application menu:
-
-> **Cooler Display Manager**
-
-Or from terminal:
-```bash
-cooler-display-ui
-```
+### Linux GUI Manager
+Launch from your application menu: **Cooler Display Manager**  
+Or run in terminal: `cooler-display-ui`
 
 The GUI lets you:
 - 👁️ **See live stats** — CPU temp, GPU temp, NVMe temp, CPU load, GPU load, RAM, Disk, GPU power, Network speed (download/upload), CPU frequency

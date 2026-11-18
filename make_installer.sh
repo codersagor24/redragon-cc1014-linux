@@ -13,6 +13,7 @@ cd "$SCRIPT_DIR"
 tar czf /tmp/cooler_payload.tar.gz \
     cooler_display.py \
     cooler_display_ui.py \
+    cooler_display_ui_win.py \
     install.sh \
     uninstall.sh \
     cooler-display.service \

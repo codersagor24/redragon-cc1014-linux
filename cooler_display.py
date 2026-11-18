@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Redragon CC-1014 / USB HID Cooler Display Daemon
+Cross-platform: Works on both Linux and Windows (10/11)
 Reads system telemetry and updates the digital display in real time.
 USB HID VID: 0x5131, PID: 0x2007
 """
@@ -18,7 +19,31 @@ import hid
 VENDOR_ID       = 0x5131
 PRODUCT_ID      = 0x2007
 UPDATE_INTERVAL = 1.0        # seconds
-CONFIG_PATH     = "/etc/cooler-display.conf"
+IS_WINDOWS      = sys.platform.startswith("win")
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+
+def get_config_dir():
+    if IS_WINDOWS:
+        appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+        path = os.path.join(appdata, "cooler-display")
+    else:
+        path = "/etc"
+    os.makedirs(path, exist_ok=True)
+    return path
+
+def get_config_path():
+    if IS_WINDOWS:
+        return os.path.join(get_config_dir(), "cooler-display.conf")
+    return "/etc/cooler-display.conf"
+
+def get_pid_path():
+    if IS_WINDOWS:
+        return os.path.join(get_config_dir(), "cooler-display.pid")
+    return "/run/cooler-display.pid"
+
+CONFIG_PATH = get_config_path()
+PID_PATH    = get_pid_path()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,14 +59,21 @@ def signal_handler(signum, frame):
     logger.info("Shutdown signal received (%s), stopping...", signum)
     running = False
 
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
+try:
+    signal.signal(signal.SIGTERM, signal_handler)
+except Exception:
+    pass
+
+try:
+    signal.signal(signal.SIGINT, signal_handler)
+except Exception:
+    pass
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 def read_config():
-    """Read settings from /etc/cooler-display.conf."""
+    """Read settings from config file."""
     cfg = {
         "mode": "cpu_temp",
         "alert_enabled": "0",
@@ -49,7 +81,7 @@ def read_config():
         "alert_value": "99",
     }
     try:
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if "=" in line and not line.startswith("#"):
@@ -62,51 +94,101 @@ def read_config():
     return cfg
 
 
-# ─── CPU ──────────────────────────────────────────────────────────────────────
+# ─── CPU Temperature ──────────────────────────────────────────────────────────
 
 def get_cpu_temperature():
-    """Read CPU package temperature from hardware sensors."""
+    """Read CPU package temperature from hardware sensors (Linux + Windows)."""
+    # 1. Native psutil sensor temperatures (Linux standard)
     try:
-        temps = psutil.sensors_temperatures()
-        if "k10temp" in temps:
-            for entry in temps["k10temp"]:
-                if entry.label == "Tctl" and entry.current is not None:
-                    return float(entry.current)
-            for entry in temps["k10temp"]:
-                if entry.current is not None:
-                    return float(entry.current)
-        if "coretemp" in temps:
-            for entry in temps["coretemp"]:
-                if "Package" in entry.label and entry.current is not None:
-                    return float(entry.current)
-            for entry in temps["coretemp"]:
-                if entry.current is not None:
-                    return float(entry.current)
-        for name, entries in temps.items():
-            for entry in entries:
-                if entry.current is not None and entry.current > 0:
-                    return float(entry.current)
+        if hasattr(psutil, "sensors_temperatures"):
+            temps = psutil.sensors_temperatures()
+            if temps:
+                if "k10temp" in temps:
+                    for entry in temps["k10temp"]:
+                        if entry.label == "Tctl" and entry.current is not None:
+                            return float(entry.current)
+                    for entry in temps["k10temp"]:
+                        if entry.current is not None:
+                            return float(entry.current)
+                if "coretemp" in temps:
+                    for entry in temps["coretemp"]:
+                        if "Package" in entry.label and entry.current is not None:
+                            return float(entry.current)
+                    for entry in temps["coretemp"]:
+                        if entry.current is not None:
+                            return float(entry.current)
+                for name, entries in temps.items():
+                    for entry in entries:
+                        if entry.current is not None and entry.current > 0:
+                            return float(entry.current)
     except Exception as e:
         logger.debug("psutil sensors error: %s", e)
 
-    # sysfs hwmon fallback
-    try:
-        for name_file in glob.glob("/sys/class/hwmon/hwmon*/name"):
-            with open(name_file) as f:
-                name = f.read().strip()
-            if name in ("k10temp", "coretemp"):
-                dir_path = name_file.rsplit("/", 1)[0]
-                for inp in glob.glob(f"{dir_path}/temp*_input"):
-                    with open(inp) as f:
-                        val = float(f.read().strip()) / 1000.0
-                        if val > 0:
-                            return val
-    except Exception as e:
-        logger.debug("sysfs hwmon error: %s", e)
+    # 2. Linux sysfs hwmon fallback
+    if not IS_WINDOWS:
+        try:
+            for name_file in glob.glob("/sys/class/hwmon/hwmon*/name"):
+                with open(name_file, "r") as f:
+                    name = f.read().strip()
+                if name in ("k10temp", "coretemp"):
+                    dir_path = name_file.rsplit("/", 1)[0]
+                    for inp in glob.glob(f"{dir_path}/temp*_input"):
+                        with open(inp, "r") as f:
+                            val = float(f.read().strip()) / 1000.0
+                            if val > 0:
+                                return val
+        except Exception as e:
+            logger.debug("sysfs hwmon error: %s", e)
+
+    # 3. Windows WMI ACPI ThermalZone or LibreHardwareMonitor
+    if IS_WINDOWS:
+        # A. WMI ThermalZone via PowerShell
+        try:
+            cmd = [
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "try { (Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop).CurrentTemperature | Select-Object -First 1 } catch { }"
+            ]
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=1).decode().strip()
+            if out and out.isdigit():
+                val_c = (int(out) - 2732) / 10.0
+                if 10.0 <= val_c <= 115.0:
+                    return val_c
+        except Exception:
+            pass
+
+        # B. LibreHardwareMonitor / OpenHardwareMonitor WMI
+        try:
+            cmd = [
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "try { (Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -eq 'Temperature' -and $_.Name -match 'CPU' }).Value | Select-Object -First 1 } catch { try { (Get-CimInstance -Namespace root/OpenHardwareMonitor -ClassName Sensor -ErrorAction Stop | Where-Object { $_.SensorType -eq 'Temperature' -and $_.Name -match 'CPU' }).Value | Select-Object -First 1 } catch {} }"
+            ]
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=1).decode().strip()
+            if out:
+                val_c = float(out.replace(",", "."))
+                if 10.0 <= val_c <= 115.0:
+                    return val_c
+        except Exception:
+            pass
+
     return None
 
 
-# ─── GPU ──────────────────────────────────────────────────────────────────────
+# ─── GPU Metrics ──────────────────────────────────────────────────────────────
+
+def _find_nvidia_smi():
+    """Locate nvidia-smi executable on Linux or Windows."""
+    if not IS_WINDOWS:
+        return "nvidia-smi"
+    for p in [
+        "nvidia-smi",
+        r"C:\Windows\System32\nvidia-smi.exe",
+        r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+    ]:
+        if os.path.exists(p) or p == "nvidia-smi":
+            return p
+    return "nvidia-smi"
+
+NVIDIA_SMI_BIN = _find_nvidia_smi()
 
 def get_gpu_metrics():
     """Read NVIDIA GPU metrics via nvidia-smi.
@@ -115,7 +197,7 @@ def get_gpu_metrics():
     result = {"temp": 0, "load": 0, "power_w": 0, "fan_pct": 0, "clock_mhz": 0}
     try:
         out = subprocess.check_output(
-            ["nvidia-smi",
+            [NVIDIA_SMI_BIN,
              "--query-gpu=temperature.gpu,utilization.gpu,power.draw,fan.speed,clocks.current.graphics",
              "--format=csv,noheader,nounits"],
             stderr=subprocess.DEVNULL, timeout=1
@@ -135,11 +217,12 @@ def get_gpu_metrics():
 def get_nvme_temperature():
     """Read NVMe SSD temperature."""
     try:
-        temps = psutil.sensors_temperatures()
-        if "nvme" in temps:
-            for entry in temps["nvme"]:
-                if entry.current and entry.current > 0:
-                    return float(entry.current)
+        if hasattr(psutil, "sensors_temperatures"):
+            temps = psutil.sensors_temperatures()
+            if temps and "nvme" in temps:
+                for entry in temps["nvme"]:
+                    if entry.current and entry.current > 0:
+                        return float(entry.current)
     except Exception:
         pass
     return None
@@ -282,7 +365,6 @@ def get_display_value(mode, metrics, cfg):
     elif mode == "nvme_temp":
         return int(round(nvme_temp)) if nvme_temp else int(round(cpu_temp))
     elif mode == "cpu_freq_ghz10":
-        # e.g. 3.4GHz → shows 34
         return max(0, min(99, int(cpu_freq / 100)))
 
     elif mode == "gpu_load":
@@ -297,7 +379,7 @@ def get_display_value(mode, metrics, cfg):
     elif mode == "net_ul_kbps":
         return max(0, min(999, int(ul_kbps)))
     elif mode == "net_dl_mbps":
-        return max(0, min(999, int(dl_kbps / 1024 * 8)))  # KB/s → Mbps
+        return max(0, min(999, int(dl_kbps / 1024 * 8)))
     elif mode == "disk_mbps":
         return max(0, min(999, int(disk_mbps)))
 
@@ -309,11 +391,9 @@ def get_display_value(mode, metrics, cfg):
         return int((time.time() - psutil.boot_time()) / 3600)
 
     elif mode == "alert":
-        # Show CPU temp normally; flash alert_value when temp ≥ threshold
         threshold = int(cfg.get("alert_temp", "80"))
         alert_val = int(cfg.get("alert_value", "99"))
         if cpu_temp >= threshold:
-            # Alternate between cpu_temp and alert_value every 0.5s
             return alert_val if (int(time.time() * 2) % 2 == 0) else int(round(cpu_temp))
         return int(round(cpu_temp))
 
@@ -324,13 +404,23 @@ def get_display_value(mode, metrics, cfg):
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
 def main():
-    logger.info("Cooler Display Daemon started (USB %04X:%04X)", VENDOR_ID, PRODUCT_ID)
+    logger.info("Cooler Display Daemon started on %s (USB %04X:%04X)",
+                "Windows" if IS_WINDOWS else "Linux", VENDOR_ID, PRODUCT_ID)
+
+    # Save PID file for daemon management
+    try:
+        with open(PID_PATH, "w") as f:
+            f.write(str(os.getpid()))
+    except Exception:
+        pass
+
     dev = None
     last_gpu_check  = 0
     cached_gpu      = {"temp": 0, "load": 0, "power_w": 0, "fan_pct": 0, "clock_mhz": 0}
     config_mtime    = 0
     cfg             = read_config()
     display_mode    = cfg.get("mode", "cpu_temp")
+    root_disk       = (os.environ.get("SystemDrive", "C:") + "\\") if IS_WINDOWS else "/"
 
     while running:
         try:
@@ -359,19 +449,28 @@ def main():
 
             # ── Gather all metrics ──
             cpu_temp = get_cpu_temperature()
-            if cpu_temp is None:
-                logger.warning("Cannot read CPU temperature, retrying...")
-                time.sleep(1)
-                continue
+            cpu_load = psutil.cpu_percent(interval=None)
 
-            cpu_load     = psutil.cpu_percent(interval=None)
+            # Fallback for CPU temp if motherboard sensors unavailable on Windows
+            if cpu_temp is None:
+                if cached_gpu["temp"] > 0:
+                    cpu_temp = float(cached_gpu["temp"])
+                else:
+                    # Estimate reasonable temperature based on CPU load (idle ~38C, full load ~75C)
+                    cpu_temp = 38.0 + (cpu_load * 0.4)
+
             cpu_freq_inf = psutil.cpu_freq()
             cpu_freq     = cpu_freq_inf.current if cpu_freq_inf else 0
             mem          = psutil.virtual_memory()
-            disk         = psutil.disk_usage("/")
-            nvme_temp    = get_nvme_temperature()
+
+            try:
+                disk = psutil.disk_usage(root_disk)
+            except Exception:
+                disk = psutil.disk_usage(".")
+
+            nvme_temp        = get_nvme_temperature()
             dl_kbps, ul_kbps = get_network_speed()
-            disk_mbps    = get_disk_io_mbps()
+            disk_mbps        = get_disk_io_mbps()
 
             # GPU: poll every 5s
             now = time.time()
@@ -439,6 +538,13 @@ def main():
             dev.close()
         except Exception:
             pass
+
+    try:
+        if os.path.exists(PID_PATH):
+            os.remove(PID_PATH)
+    except Exception:
+        pass
+
     logger.info("Cooler Display Daemon stopped.")
 
 

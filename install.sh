@@ -59,7 +59,8 @@ chmod +x /usr/local/bin/cooler_display.py
 # ── 5. GUI app ────────────────────────────────────────────
 echo "[5/6] Installing GUI app..."
 cp "$SCRIPT_DIR/cooler_display_ui.py" /usr/local/bin/cooler-display-ui
-chmod +x /usr/local/bin/cooler-display-ui
+cp "$SCRIPT_DIR/cooler_display_ui_win.py" /usr/local/bin/cooler_display_ui_win.py 2>/dev/null || true
+chmod +x /usr/local/bin/cooler-display-ui /usr/local/bin/cooler_display_ui_win.py 2>/dev/null || true
 
 # Desktop entry
 cp "$SCRIPT_DIR/cooler-display.desktop" /usr/share/applications/cooler-display.desktop

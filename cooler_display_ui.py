@@ -5,9 +5,16 @@ Controls the cooler-display systemd service and shows live system telemetry.
 Supports all display modes: CPU/GPU temps, RAM, Disk, Network, Clock, Alert, and more.
 """
 
-import gi
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk, GLib
+except Exception:
+    # Fallback to Tkinter GUI on Windows or headless environments without GTK3
+    from cooler_display_ui_win import main as win_main
+    if __name__ == "__main__":
+        win_main()
+    sys.exit(0)
 
 import subprocess
 import psutil
