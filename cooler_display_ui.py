@@ -6,7 +6,7 @@ Controls the cooler-display systemd service and shows live system telemetry.
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib, Pango
+from gi.repository import Gtk, GLib
 
 import subprocess
 import psutil
@@ -141,12 +141,9 @@ class MainWindow(Gtk.ApplicationWindow):
         header.set_margin_start(24)
         header.set_margin_end(24)
 
-        title_lbl = Gtk.Label(label="🧊  Cooler Display Manager")
+        title_lbl = Gtk.Label()
+        title_lbl.set_markup('<span size="16000" weight="bold">🧊  Cooler Display Manager</span>')
         title_lbl.set_halign(Gtk.Align.START)
-        title_attrs = Pango.AttrList()
-        title_attrs.insert(Pango.AttrSize.new(16 * 1024))
-        title_attrs.insert(Pango.AttrWeight.new(Pango.Weight.BOLD, 0, -1))
-        title_lbl.set_attributes(title_attrs)
 
         sub_lbl = Gtk.Label(label="Linux driver for USB digital cooler displays")
         sub_lbl.set_halign(Gtk.Align.START)
@@ -250,9 +247,7 @@ class MainWindow(Gtk.ApplicationWindow):
             val = Gtk.Label(label="—")
             val.set_halign(Gtk.Align.END)
             val.set_hexpand(True)
-            attrs = Pango.AttrList()
-            attrs.insert(Pango.AttrWeight.new(Pango.Weight.BOLD, 0, -1))
-            val.set_attributes(attrs)
+            val.set_markup("<b>—</b>")
             grid.attach(icon_lbl, 0, row, 1, 1)
             grid.attach(lbl,      1, row, 1, 1)
             grid.attach(val,      2, row, 1, 1)
