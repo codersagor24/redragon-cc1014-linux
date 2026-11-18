@@ -1,0 +1,14 @@
+[Unit]
+Description=Redragon CC-1014 CPU Cooler Temperature Display Daemon
+After=multi-user.target lm-sensors.service
+Wants=lm-sensors.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/cooler_display.py
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
